@@ -430,8 +430,12 @@ router.get('/playlist', async (req, res, next) => {
     // Get session
     const { deviceId, clientVersion, jsPack } = await getSessionData();
 
-    // Get TOTP using the service
-    const { secret, version } = totpService.getLatestTotpSecret();
+    // Get TOTP using the service (async, using KV if available)
+    const { secret, version } = await totpService.getLatestTotpSecret(req.env);
+    
+    // Log version being used for debug
+    // console.log(`Using secret version: ${version}`);
+    
     const totp = generateTotp(secret);
 
     // Get tokens

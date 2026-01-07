@@ -3,5 +3,5 @@ main = "_worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
-[site]
-bucket = "./public"
+[vars]
+SECRET_GIST_URL = "https://gist.githubusercontent.com/uimaxbai/30c5d0a864d44e09b5a0fc1589431ae3/raw/b05a2fa507cda4578f55c9ce6f72390046f7a764/latest_secret.json"

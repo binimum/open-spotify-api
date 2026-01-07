@@ -6,8 +6,9 @@ var songlinkRouter = require('./routes/songlink');
 
 var app = express();
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// Cloudflare Worker adapter handles body parsing.
+// app.use(express.json());
+// app.use(express.urlencoded({ extended: false }));
 
 app.use('/', indexRouter);
 app.use('/spotify', spotifyRouter);

@@ -28,14 +28,12 @@ export default {
       method: request.method,
       headers: headers,
       query: Object.fromEntries(url.searchParams),
-      body: {}, // Body parsing middleware in app.js might need a stream
+      body: {}, 
+      env: env, // Pass environment bindings (KV, etc) to Express
       unpipe: () => {},
       on: (event, cb) => {
         if (event === 'data' && request.body) {
-           // This is where it gets tricky without a real stream adapter.
-           // However, if we just want to support GET requests for now (which is what the user has),
-           // this is fine.
-           // The POST request to /playlist needs body.
+           // ...
         }
         if (event === 'end') cb();
       }
