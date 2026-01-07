@@ -1,15 +1,29 @@
-const { exec } = require('child_process');
-const fs = require('fs');
 const path = require('path');
-const util = require('util');
 
-const execAsync = util.promisify(exec);
-const readFileAsync = util.promisify(fs.readFile);
+// Try to load dependencies that might not exist in Cloudflare environment
+let exec, fs, execAsync, readFileAsync;
+try {
+  exec = require('child_process').exec;
+  fs = require('fs');
+  const util = require('util');
+  execAsync = util.promisify(exec);
+  readFileAsync = util.promisify(fs.readFile);
+} catch (e) {
+  // Ignore errors in environments where these modules are missing
+}
 
 const SCRIPT_PATH = path.join(__dirname, '../scripts/spotify_totp.py');
-const SECRET_FILE_PATH = path.join(__dirname, '../scripts/secretBytes.json'); // We'll use secretBytes.json as it has the needed format
+// Require the JSON directly so it gets bundled
+// check if file exists before requiring to avoid build error? 
+// No, user has the file.
+let bundledSecrets = null;
+try {
+  bundledSecrets = require('../scripts/secretBytes.json');
+} catch(e) {
+  console.warn('Could not load bundled secrets');
+}
 
-// Fallback secret (from provided code)
+// Fallback secret
 const FALLBACK_SECRET = [
   44, 55, 47, 42, 70, 40, 34, 114, 76, 74, 50, 111, 120, 97, 75, 76, 94, 102, 43, 69, 49, 120, 118,
   80, 64, 78
@@ -21,38 +35,45 @@ let currentSecret = {
   secret: FALLBACK_SECRET
 };
 
+// Initialize with bundled secrets if available
+if (bundledSecrets && Array.isArray(bundledSecrets) && bundledSecrets.length > 0) {
+  bundledSecrets.sort((a, b) => b.version - a.version);
+  currentSecret = bundledSecrets[0];
+}
+
 async function updateSecrets() {
+  if (!execAsync || !readFileAsync) {
+    console.log('Skipping secret update: child_process or fs not available');
+    return;
+  }
+
   console.log('Updating Spotify TOTP secrets...');
   try {
-    // Run the Python script with --all flag to generate files
-    // We execute it in the scripts directory so files are generated there
     const scriptsDir = path.dirname(SCRIPT_PATH);
     await execAsync(`python3 ${SCRIPT_PATH} --all`, { cwd: scriptsDir });
     
-    // Read the generated file
+    // We can try to read the file if fs is available
+    // But in a worker, fs might be mocked but empty. 
+    // This part is strictly for local Node.js usage.
+    const SECRET_FILE_PATH = path.join(__dirname, '../scripts/secretBytes.json');
     const data = await readFileAsync(SECRET_FILE_PATH, 'utf8');
     const secrets = JSON.parse(data);
     
-    // Get the latest version (highest version number)
     if (Array.isArray(secrets) && secrets.length > 0) {
-      // Sort by version descending
       secrets.sort((a, b) => b.version - a.version);
       currentSecret = secrets[0];
       console.log(`Updated secret to version ${currentSecret.version}`);
-    } else {
-      console.warn('No secrets found in output file');
     }
   } catch (error) {
     console.error('Failed to update secrets:', error.message);
-    // Keep using existing or fallback secret
   }
 }
 
-// Initial update
-updateSecrets();
-
-// Schedule updates every hour
-setInterval(updateSecrets, 1000 * 60 * 60);
+// Initial update only if we can
+if (execAsync) {
+  updateSecrets();
+  setInterval(updateSecrets, 1000 * 60 * 60);
+}
 
 function getLatestTotpSecret() {
   return currentSecret;

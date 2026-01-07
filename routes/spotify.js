@@ -14,6 +14,14 @@ const COMMON_HEADERS = {
   'Sec-Ch-Ua': `"Chromium";v="${BROWSER_VERSION}", "Not(A:Brand";v="24", "Google Chrome";v="${BROWSER_VERSION}"`
 };
 
+// Cache storage
+let cachedSession = null;
+let cachedAccessToken = null;
+let cachedClientToken = null;
+
+const CACHE_TTL_MS = 25 * 60 * 1000; // 25 minutes
+const TOKEN_TTL_MS = 50 * 60 * 1000; // 50 minutes
+
 // Generate TOTP
 function generateTotp(secret) {
   // Python script produces array of numbers, user code expects array of numbers.
@@ -52,6 +60,10 @@ function extractJsLinks(html) {
 
 // Get session and extract data
 async function getSessionData() {
+  if (cachedSession && cachedSession.expiresAt > Date.now()) {
+    return cachedSession.data;
+  }
+
   const response = await fetch('https://open.spotify.com', {
     headers: COMMON_HEADERS
   });
@@ -88,11 +100,22 @@ async function getSessionData() {
     ? jsPackRelative
     : `https://open.spotify.com${jsPackRelative}`;
 
-  return { deviceId: cookie, clientVersion, jsPack };
+  const data = { deviceId: cookie, clientVersion, jsPack };
+  
+  cachedSession = {
+    data,
+    expiresAt: Date.now() + CACHE_TTL_MS
+  };
+
+  return data;
 }
 
 // Get access token
 async function getAccessToken(totp, totpVer) {
+  if (cachedAccessToken && cachedAccessToken.expiresAt > Date.now()) {
+    return cachedAccessToken.data;
+  }
+
   const params = new URLSearchParams({
     reason: 'init',
     productType: 'web-player',
@@ -104,11 +127,23 @@ async function getAccessToken(totp, totpVer) {
     headers: COMMON_HEADERS
   });
   const data = await response.json();
-  return { accessToken: data.accessToken, clientId: data.clientId };
+  
+  const result = { accessToken: data.accessToken, clientId: data.clientId };
+  
+  cachedAccessToken = {
+    data: result,
+    expiresAt: Date.now() + TOKEN_TTL_MS
+  };
+  
+  return result;
 }
 
 // Get client token
 async function getClientToken(clientVersion, clientId, deviceId) {
+  if (cachedClientToken && cachedClientToken.expiresAt > Date.now()) {
+    return cachedClientToken.data;
+  }
+
   const payload = {
     client_data: {
       client_version: clientVersion,
@@ -133,7 +168,14 @@ async function getClientToken(clientVersion, clientId, deviceId) {
     body: JSON.stringify(payload)
   });
   const data = await response.json();
-  return data.granted_token.token;
+  const token = data.granted_token.token;
+  
+  cachedClientToken = {
+    data: token,
+    expiresAt: Date.now() + TOKEN_TTL_MS
+  };
+  
+  return token;
 }
 
 // Extract mappings from JS code
@@ -196,6 +238,9 @@ function combineChunks(strMapping, hashMapping) {
   return chunks;
 }
 
+// Cache for the hash
+let cachedHash = { url: null, hash: null };
+
 // Get sha256 hash
 async function getSha256Hash(jsPack) {
   if (!jsPack) {
@@ -203,7 +248,13 @@ async function getSha256Hash(jsPack) {
     return 'a67612f8c59f4cb4a9723d8e0e0e7b7cb8c5c3d45e3d8c4f5e6f7e8f9a0b1c2d';
   }
 
+  // Return cached hash if url matches
+  if (cachedHash.url === jsPack && cachedHash.hash) {
+    return cachedHash.hash;
+  }
+
   try {
+    console.log('Fetching and parsing JS pack for hash...');
     // Fetch the main JS pack
     const response = await fetch(jsPack, {
       headers: COMMON_HEADERS
@@ -241,6 +292,11 @@ async function getSha256Hash(jsPack) {
         hash = 'a67612f8c59f4cb4a9723d8e0e0e7b7cb8c5c3d45e3d8c4f5e6f7e8f9a0b1c2d';
       }
     }
+    
+    // Update cache
+    cachedHash = { url: jsPack, hash };
+    console.log('Hash extracted:', hash);
+    
     return hash;
   } catch (error) {
     console.error('Failed to get sha256 hash:', error);
@@ -302,39 +358,74 @@ async function getAllTracks(
   jsPack
 ) {
   const tracks = [];
-  let offset = 0;
   const limit = 343; // Upper limit
-  while (true) {
-    const data = await fetchPlaylist(
-      accessToken,
-      clientToken,
-      clientVersion,
-      playlistId,
-      jsPack,
-      offset,
-      limit
-    );
-    const content = data?.data?.playlistV2?.content;
-    if (!content) break;
-    tracks.push(...content.items);
-    if (content.totalCount <= offset + limit) break;
-    offset += limit;
+
+  // 1. Fetch first page
+  const firstPage = await fetchPlaylist(
+    accessToken,
+    clientToken,
+    clientVersion,
+    playlistId,
+    jsPack,
+    0,
+    limit
+  );
+
+  const content = firstPage?.data?.playlistV2?.content;
+  if (!content) return tracks;
+
+  tracks.push(...content.items);
+  const totalCount = content.totalCount;
+
+  if (totalCount <= limit) {
+    return tracks;
   }
+
+  // 2. Fetch remaining pages in parallel
+  console.log(`Fetching ${Math.ceil((totalCount - limit) / limit)} more pages in parallel...`);
+  const promises = [];
+  for (let offset = limit; offset < totalCount; offset += limit) {
+    promises.push(
+      fetchPlaylist(
+        accessToken,
+        clientToken,
+        clientVersion,
+        playlistId,
+        jsPack,
+        offset,
+        limit
+      )
+    );
+  }
+
+  // Simple concurrency, awaiting all at once. 
+  // For extremely large playlists, we might want to batch this, 
+  // but for now, fetches are lightweight enough.
+  const pageResults = await Promise.all(promises);
+  console.log('All pages fetched.');
+
+  for (const page of pageResults) {
+    const pageContent = page?.data?.playlistV2?.content;
+    if (pageContent?.items) {
+      tracks.push(...pageContent.items);
+    }
+  }
+
   return tracks;
 }
 
-router.post('/playlist', async (req, res, next) => {
+router.get('/playlist', async (req, res, next) => {
   try {
-    const { playlistUrl } = req.body;
+    const { url } = req.query;
 
-    if (!playlistUrl) {
-      return res.status(400).json({ error: 'Missing playlistUrl' });
+    if (!url) {
+      return res.status(400).json({ error: 'Missing url' });
     }
 
     // Extract playlist ID from URL
-    const playlistId = playlistUrl.includes('playlist/')
-      ? playlistUrl.split('playlist/')[1].split('?')[0]
-      : playlistUrl;
+    const playlistId = url.includes('playlist/')
+      ? url.split('playlist/')[1].split('?')[0]
+      : url;
 
     // Get session
     const { deviceId, clientVersion, jsPack } = await getSessionData();

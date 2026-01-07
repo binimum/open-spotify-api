@@ -15,7 +15,10 @@ app.use('/songlink', songlinkRouter);
 
 app.use(function(err, req, res, next) {
   res.status(err.status || 500);
-  res.send('error');
+  res.json({
+    status: err.status || 500,
+    message: err.message || 'error'
+  });
 });
 
 module.exports = app;
