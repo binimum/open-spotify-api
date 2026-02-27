@@ -3,7 +3,7 @@ An open Spotify API that allows you to use public Spotify endpoints.
 
 This API is fully modular.
 
-### Find regularly updated Spotify TOTP secrets here: https://gist.github.com/uimaxbai/30c5d0a864d44e09b5a0fc1589431ae3
+### Find regularly updated Spotify TOTP secrets here: [https://gist.github.com/binimum/30c5d0a864d44e09b5a0fc1589431ae3](https://gist.github.com/binimum/30c5d0a864d44e09b5a0fc1589431ae3)
 
 ## Endpoints
 
